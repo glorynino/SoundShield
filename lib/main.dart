@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'screens/biometric_gate_screen.dart';
-import 'screens/home_screen.dart'; // ton écran principal
+import 'screens/home_screens.dart';
 
 void main() {
   runApp(const MyApp());

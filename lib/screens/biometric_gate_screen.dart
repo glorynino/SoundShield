@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'biometric_service.dart';
+import 'package:mobil_audio_app/services/biometric_service.dart';
 
 class BiometricGateScreen extends StatefulWidget {
-  final Widget nextScreen; // écran après auth réussie
+  final Widget nextScreen;
 
   const BiometricGateScreen({super.key, required this.nextScreen});
 
