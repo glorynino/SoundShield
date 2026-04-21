@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "102289955166",
+    "project_id": "mobil-audio-app",
+    "storage_bucket": "mobil-audio-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:102289955166:android:f834e97cf171627c8a97cf",
+        "android_client_info": {
+          "package_name": "com.example.mobil_audio_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAl8ZVmbk6o2vBcGtjsGWpgi9Fgd2L9Mvc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
