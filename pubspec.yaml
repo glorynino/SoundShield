@@ -34,6 +34,8 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
+  just_audio: ^0.9.40
+  http: ^1.2.2
 
   # ── Firebase (ajoutés par toi) ───────────────────────────────
   firebase_core: ^3.6.0
