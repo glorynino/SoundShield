@@ -11,6 +11,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../widgets/app_theme.dart';
 import 'player_screen.dart';
+import 'favorit_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -25,6 +26,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final List<Widget> _pages = const [
     _StatistiquesPage(),
     PlayerScreen(),
+    FavoritesScreen(),
   ];
 
   @override
@@ -69,6 +71,11 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icon(Icons.headphones_outlined),
             activeIcon: Icon(Icons.headphones_rounded),
             label: 'Lecteur',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.favorite_border_rounded),
+            activeIcon: Icon(Icons.favorite_rounded),
+            label: 'Favoris',
           ),
         ],
       ),
