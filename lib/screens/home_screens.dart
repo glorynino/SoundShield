@@ -10,8 +10,9 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../widgets/app_theme.dart';
+import '../widgets/global_mini_player.dart';
 import 'player_screen.dart';
-import 'favorit_screen.dart';
+import 'favorites_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -39,7 +40,15 @@ class _HomeScreenState extends State<HomeScreen> {
         index: _currentIndex,
         children: _pages,
       ),
-      bottomNavigationBar: _buildBottomNav(),
+      // ── Mini lecteur global ──────────────────────────────────────────────
+      // Affiché au-dessus de la navbar sur les 3 onglets
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const GlobalMiniPlayer(),
+          _buildBottomNav(),
+        ],
+      ),
     );
   }
 
