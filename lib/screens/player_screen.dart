@@ -1,19 +1,17 @@
 // ============================================================
 //  lib/screens/player_screen.dart
-//  Lecteur audio Quran :
-//  - Liste catégories (Mecquoises / Médinoises) → sourates
-//  - Mini lecteur fixe en bas
-//  - Lecture en arrière-plan via just_audio
-//  - Lecture / Pause / Répétition
-//  - Ajout/suppression favoris (Firestore)
+//  Fusion : AudioController global + tracking stats Firestore
 // ============================================================
 
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:just_audio/just_audio.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/sourate_model.dart';
 import '../services/quran_service.dart';
+import '../services/stats_service.dart';
+import '../services/audio_controller.dart';
 import '../widgets/app_theme.dart';
+import 'package:just_audio/just_audio.dart';
 
 class PlayerScreen extends StatefulWidget {
   const PlayerScreen({super.key});
@@ -24,114 +22,114 @@ class PlayerScreen extends StatefulWidget {
 
 class _PlayerScreenState extends State<PlayerScreen> {
   final _quranService = QuranService();
-  final _player       = AudioPlayer();
+  final _statsService = StatsService();
+  final _ctrl         = AudioController.instance;
 
   List<Sourate> _sourates        = [];
   bool _loadingData              = true;
   String? _erreur;
-
-  Sourate? _sourrenteSourate;
-  bool _isPlaying   = false;
-  bool _isRepeat    = false;
-  bool _isBuffering = false;
-  Duration _position  = Duration.zero;
-  Duration _duration  = Duration.zero;
-
-  // Catégorie sélectionnée : null = toutes
   String? _categorieSelectionnee;
+  Set<int> _favorisIds           = {};
 
-  // Favoris (ids)
-  Set<int> _favorisIds = {};
+  // ── Timer stats ───────────────────────────────────────────────────────────
+  Timer? _minuteTimer;
+  int    _secondesEcoute = 0;
+  int?   _dernierNumeroSourate;
 
   @override
   void initState() {
     super.initState();
     _loadSourates();
-    _setupPlayerListeners();
     _loadFavorisIds();
+    _ctrl.addListener(_onControllerChange);
+
+    // Écouter le stream playing pour démarrer/arrêter le timer stats
+    _ctrl.player.playingStream.listen((playing) {
+      if (playing) {
+        _startMinuteTimer();
+      } else {
+        _stopMinuteTimer();
+      }
+    });
+
+    // Détecter changement de sourate pour enregistrer le début d'écoute
+    _ctrl.player.processingStateStream.listen((state) {
+      if (state == ProcessingState.completed && !_ctrl.isRepeat) {
+        _stopMinuteTimer();
+      }
+    });
   }
 
   @override
   void dispose() {
-    _player.dispose();
+    _stopMinuteTimer();
+    _ctrl.removeListener(_onControllerChange);
     super.dispose();
   }
 
-  // ── Chargement ────────────────────────────────────────────────────────────
+  void _onControllerChange() {
+    if (mounted) setState(() {});
+  }
+
+  // ── Timer : 1 tick/seconde → toutes les 60s on enregistre 1 minute ───────
+  void _startMinuteTimer() {
+    _minuteTimer?.cancel();
+    _minuteTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_ctrl.titreEnCours == null) return;
+      _secondesEcoute++;
+      if (_secondesEcoute >= 60) {
+        _secondesEcoute = 0;
+        // Trouver la sourate active dans la liste
+        final s = _sourates.firstWhere(
+          (s) => s.nomAnglais == _ctrl.titreEnCours,
+          orElse: () => _sourates.first,
+        );
+        _statsService.enregistrerMinute(
+          numeroSourate: s.numero,
+          nomSourate:    s.nomAnglais,
+        );
+      }
+    });
+  }
+
+  void _stopMinuteTimer() {
+    _minuteTimer?.cancel();
+    _minuteTimer = null;
+  }
+
+  // ── Chargement données ────────────────────────────────────────────────────
   Future<void> _loadSourates() async {
     try {
-      final sourates = await _quranService.getSourates();
-      if (mounted) setState(() { _sourates = sourates; _loadingData = false; });
+      final s = await _quranService.getSourates();
+      if (mounted) setState(() { _sourates = s; _loadingData = false; });
     } catch (e) {
-      if (mounted) setState(() { _erreur = 'Impossible de charger les sourates.'; _loadingData = false; });
+      if (mounted) setState(() {
+        _erreur      = 'Impossible de charger les sourates.';
+        _loadingData = false;
+      });
     }
   }
 
   Future<void> _loadFavorisIds() async {
     _quranService.getFavorisStream().listen((favoris) {
-      if (mounted) {
-        setState(() {
-          _favorisIds = favoris.map((f) => f.numeroSourate).toSet();
-        });
-      }
+      if (mounted) setState(() {
+        _favorisIds = favoris.map((f) => f.numeroSourate).toSet();
+      });
     });
   }
 
-  // ── Listeners audio ───────────────────────────────────────────────────────
-  void _setupPlayerListeners() {
-    _player.playingStream.listen((playing) {
-      if (mounted) setState(() => _isPlaying = playing);
-    });
-
-    _player.positionStream.listen((pos) {
-      if (mounted) setState(() => _position = pos);
-    });
-
-    _player.durationStream.listen((dur) {
-      if (mounted && dur != null) setState(() => _duration = dur);
-    });
-
-    _player.processingStateStream.listen((state) {
-      if (mounted) {
-        setState(() => _isBuffering = state == ProcessingState.buffering ||
-            state == ProcessingState.loading);
-        // Si terminé + répétition → rejouer
-        if (state == ProcessingState.completed && _isRepeat) {
-          _player.seek(Duration.zero);
-          _player.play();
-        }
-      }
-    });
-  }
-
-  // ── Actions lecteur ───────────────────────────────────────────────────────
+  // ── Jouer une sourate ─────────────────────────────────────────────────────
   Future<void> _jouerSourate(Sourate s) async {
-    if (s.audioUrl == null) return;
-    try {
-      setState(() { _sourrenteSourate = s; _isBuffering = true; });
-      await _player.setUrl(s.audioUrl!);
-      await _player.play();
-    } catch (e) {
-      if (mounted) showSnackbar(context, 'Erreur de lecture. Réessayez.');
+    // Si c'est une nouvelle sourate → enregistrer début d'écoute
+    if (_dernierNumeroSourate != s.numero) {
+      _secondesEcoute = 0;
+      _dernierNumeroSourate = s.numero;
+      await _statsService.enregistrerDebutEcoute(
+        numeroSourate: s.numero,
+        nomSourate:    s.nomAnglais,
+      );
     }
-  }
-
-  void _togglePlayPause() {
-    if (_isPlaying) {
-      _player.pause();
-    } else {
-      _player.play();
-    }
-  }
-
-  void _toggleRepeat() {
-    setState(() => _isRepeat = !_isRepeat);
-    _player.setLoopMode(_isRepeat ? LoopMode.one : LoopMode.off);
-  }
-
-  void _seek(double val) {
-    final pos = Duration(seconds: val.toInt());
-    _player.seek(pos);
+    await _ctrl.jouerSourate(s);
   }
 
   // ── Favoris ───────────────────────────────────────────────────────────────
@@ -139,31 +137,27 @@ class _PlayerScreenState extends State<PlayerScreen> {
     try {
       if (_favorisIds.contains(s.numero)) {
         await _quranService.supprimerFavori(s.numero);
-        if (mounted) showSnackbar(context, '${s.nomAnglais} retiré des favoris.', isError: false);
+        if (mounted) showSnackbar(context,
+            '${s.nomAnglais} retiré des favoris.', isError: false);
       } else {
         await _quranService.ajouterFavori(s);
-        if (mounted) showSnackbar(context, '${s.nomAnglais} ajouté aux favoris !', isError: false);
+        if (mounted) showSnackbar(context,
+            '${s.nomAnglais} ajouté aux favoris !', isError: false);
       }
     } catch (e) {
       if (mounted) showSnackbar(context, 'Erreur. Réessayez.');
     }
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
-  String _formatDuration(Duration d) {
-    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$m:$s';
-  }
-
   List<Sourate> get _souratesFiltrees {
     if (_categorieSelectionnee == null) return _sourates;
-    return _sourates.where((s) => s.categorie == _categorieSelectionnee).toList();
+    return _sourates
+        .where((s) => s.categorie == _categorieSelectionnee)
+        .toList();
   }
 
-  List<String> get _categories {
-    return _sourates.map((s) => s.categorie).toSet().toList();
-  }
+  List<String> get _categories =>
+      _sourates.map((s) => s.categorie).toSet().toList();
 
   // ── BUILD ─────────────────────────────────────────────────────────────────
   @override
@@ -173,17 +167,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // ── En-tête ─────────────────────────────────────────────────
             _buildHeader(),
-
-            // ── Filtres catégories ───────────────────────────────────────
             if (!_loadingData && _erreur == null) _buildCategories(),
-
-            // ── Liste sourates ───────────────────────────────────────────
             Expanded(child: _buildBody()),
-
-            // ── Mini lecteur fixe en bas ─────────────────────────────────
-            if (_sourrenteSourate != null) _buildMiniPlayer(),
+            // Mini lecteur géré par GlobalMiniPlayer dans HomeScreen
           ],
         ),
       ),
@@ -237,14 +224,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
         itemCount: cats.length,
         separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (_, i) {
-          final cat = cats[i];
+          final cat      = cats[i];
           final selected = (i == 0 && _categorieSelectionnee == null) ||
               cat == _categorieSelectionnee;
           return GestureDetector(
             onTap: () => setState(() =>
                 _categorieSelectionnee = i == 0 ? null : cat),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
                 color: selected ? AppColors.primary : AppColors.card,
                 borderRadius: BorderRadius.circular(20),
@@ -253,9 +241,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
               ),
               child: Text(cat,
                   style: GoogleFonts.syne(
-                    color: selected
-                        ? Colors.white
-                        : AppColors.textSecondary,
+                    color: selected ? Colors.white : AppColors.textSecondary,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                   )),
@@ -295,17 +281,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
       );
     }
 
-    final liste = _souratesFiltrees;
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
-      itemCount: liste.length,
-      itemBuilder: (_, i) => _buildSourateItem(liste[i]),
+      itemCount: _souratesFiltrees.length,
+      itemBuilder: (_, i) => _buildSourateItem(_souratesFiltrees[i]),
     );
   }
 
   Widget _buildSourateItem(Sourate s) {
-    final estActive  = _sourrenteSourate?.numero == s.numero;
-    final estFavori  = _favorisIds.contains(s.numero);
+    final estActive = _ctrl.titreEnCours == s.nomAnglais;
+    final estFavori = _favorisIds.contains(s.numero);
 
     return GestureDetector(
       onTap: () => _jouerSourate(s),
@@ -318,8 +303,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
               : AppColors.card,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: estActive ? AppColors.primary : AppColors.border,
-          ),
+              color: estActive ? AppColors.primary : AppColors.border),
         ),
         child: Row(
           children: [
@@ -327,17 +311,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
             Container(
               width: 40, height: 40,
               decoration: BoxDecoration(
-                color: estActive
-                    ? AppColors.primary
-                    : AppColors.surface,
+                color: estActive ? AppColors.primary : AppColors.surface,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Center(
                 child: Text('${s.numero}',
                     style: GoogleFonts.syne(
-                      color: estActive
-                          ? Colors.white
-                          : AppColors.textSecondary,
+                      color: estActive ? Colors.white : AppColors.textSecondary,
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
                     )),
@@ -350,70 +330,66 @@ class _PlayerScreenState extends State<PlayerScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(s.nomAnglais,
-                            style: GoogleFonts.syne(
-                              color: estActive
-                                  ? AppColors.primary
-                                  : AppColors.textPrimary,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                            )),
-                      ),
-                      Text(s.nom,
-                          style: const TextStyle(
-                            color: AppColors.accent,
-                            fontSize: 16,
-                            fontFamily: 'serif',
+                  Row(children: [
+                    Expanded(
+                      child: Text(s.nomAnglais,
+                          style: GoogleFonts.syne(
+                            color: estActive
+                                ? AppColors.primary
+                                : AppColors.textPrimary,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
                           )),
-                    ],
-                  ),
+                    ),
+                    Text(s.nom,
+                        style: const TextStyle(
+                          color: AppColors.accent,
+                          fontSize: 16,
+                          fontFamily: 'serif',
+                        )),
+                  ]),
                   const SizedBox(height: 3),
-                  Row(
-                    children: [
-                      Text(s.traduction,
-                          style: GoogleFonts.syne(
-                              color: AppColors.textSecondary,
-                              fontSize: 11)),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: s.type == 'Meccan'
-                              ? AppColors.primary.withValues(alpha: 0.15)
-                              : AppColors.accent.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(s.categorie,
-                            style: GoogleFonts.syne(
-                              color: s.type == 'Meccan'
-                                  ? AppColors.primaryLight
-                                  : AppColors.accent,
-                              fontSize: 9,
-                              fontWeight: FontWeight.w700,
-                            )),
+                  Row(children: [
+                    Text(s.traduction,
+                        style: GoogleFonts.syne(
+                            color: AppColors.textSecondary, fontSize: 11)),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: s.type == 'Meccan'
+                            ? AppColors.primary.withValues(alpha: 0.15)
+                            : AppColors.accent.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(4),
                       ),
-                      const Spacer(),
-                      Text('${s.nbVersets} v.',
+                      child: Text(s.categorie,
                           style: GoogleFonts.syne(
-                              color: AppColors.textSecondary,
-                              fontSize: 10)),
-                    ],
-                  ),
+                            color: s.type == 'Meccan'
+                                ? AppColors.primaryLight
+                                : AppColors.accent,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                          )),
+                    ),
+                    const Spacer(),
+                    Text('${s.nbVersets} v.',
+                        style: GoogleFonts.syne(
+                            color: AppColors.textSecondary, fontSize: 10)),
+                  ]),
                 ],
               ),
             ),
 
             const SizedBox(width: 8),
 
-            // Bouton favori
+            // Favori
             GestureDetector(
               onTap: () => _toggleFavori(s),
               child: Icon(
-                estFavori ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                estFavori
+                    ? Icons.favorite_rounded
+                    : Icons.favorite_border_rounded,
                 color: estFavori ? AppColors.error : AppColors.textSecondary,
                 size: 20,
               ),
@@ -421,8 +397,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
             const SizedBox(width: 8),
 
-            // Icône lecture
-            if (estActive && _isPlaying)
+            // État lecture
+            if (estActive && _ctrl.player.playing)
               const Icon(Icons.equalizer_rounded,
                   color: AppColors.primary, size: 20)
             else
@@ -430,144 +406,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   color: AppColors.textSecondary, size: 20),
           ],
         ),
-      ),
-    );
-  }
-
-  // ── Mini lecteur en bas ───────────────────────────────────────────────────
-  Widget _buildMiniPlayer() {
-    final s = _sourrenteSourate!;
-    final maxSec = _duration.inSeconds.toDouble();
-    final curSec = _position.inSeconds.toDouble().clamp(0.0, maxSec > 0 ? maxSec : 1.0);
-
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        border: Border(top: BorderSide(color: AppColors.border)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.4),
-            blurRadius: 20,
-            offset: const Offset(0, -4),
-          ),
-        ],
-      ),
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Barre de progression
-          SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              trackHeight: 3,
-              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-              overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-              activeTrackColor: AppColors.primary,
-              inactiveTrackColor: AppColors.border,
-              thumbColor: AppColors.primary,
-              overlayColor: AppColors.primary.withValues(alpha: 0.2),
-            ),
-            child: Slider(
-              value: curSec,
-              min: 0,
-              max: maxSec > 0 ? maxSec : 1.0,
-              onChanged: _seek,
-            ),
-          ),
-
-          // Temps
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: Row(
-              children: [
-                Text(_formatDuration(_position),
-                    style: GoogleFonts.syne(
-                        color: AppColors.textSecondary, fontSize: 10)),
-                const Spacer(),
-                Text(_formatDuration(_duration),
-                    style: GoogleFonts.syne(
-                        color: AppColors.textSecondary, fontSize: 10)),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 8),
-
-          Row(
-            children: [
-              // Infos sourate
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(s.nomAnglais,
-                        style: GoogleFonts.syne(
-                          color: AppColors.textPrimary,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis),
-                    Text(s.traduction,
-                        style: GoogleFonts.syne(
-                            color: AppColors.textSecondary, fontSize: 11)),
-                  ],
-                ),
-              ),
-
-              // Bouton répétition
-              IconButton(
-                onPressed: _toggleRepeat,
-                icon: Icon(
-                  Icons.repeat_one_rounded,
-                  color: _isRepeat ? AppColors.accent : AppColors.textSecondary,
-                  size: 22,
-                ),
-              ),
-
-              // Bouton play/pause
-              GestureDetector(
-                onTap: _togglePlayPause,
-                child: Container(
-                  width: 48, height: 48,
-                  decoration: BoxDecoration(
-                    color: AppColors.primary,
-                    shape: BoxShape.circle,
-                  ),
-                  child: _isBuffering
-                      ? const Padding(
-                          padding: EdgeInsets.all(14),
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation(Colors.white),
-                          ),
-                        )
-                      : Icon(
-                          _isPlaying
-                              ? Icons.pause_rounded
-                              : Icons.play_arrow_rounded,
-                          color: Colors.white,
-                          size: 26,
-                        ),
-                ),
-              ),
-
-              // Bouton favori
-              IconButton(
-                onPressed: () => _toggleFavori(s),
-                icon: Icon(
-                  _favorisIds.contains(s.numero)
-                      ? Icons.favorite_rounded
-                      : Icons.favorite_border_rounded,
-                  color: _favorisIds.contains(s.numero)
-                      ? AppColors.error
-                      : AppColors.textSecondary,
-                  size: 22,
-                ),
-              ),
-            ],
-          ),
-        ],
       ),
     );
   }

@@ -1,5 +1,6 @@
 // ============================================================
 //  lib/models/sourate_model.dart
+// la sturcture de l'objet api qui arrive
 // ============================================================
 
 class Sourate {
@@ -11,6 +12,7 @@ class Sourate {
   final int nbVersets;
   final String? audioUrl;
 
+  // constructeur de la classe ici
   Sourate({
     required this.numero,
     required this.nom,
