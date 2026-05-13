@@ -5,13 +5,13 @@
 
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/sourate_model.dart';
 import '../services/quran_service.dart';
 import '../services/stats_service.dart';
-import '../services/audio_controller.dart';
+import '../services/Audio_controller.dart';
 import '../widgets/app_theme.dart';
-import 'package:just_audio/just_audio.dart';
 
 class PlayerScreen extends StatefulWidget {
   const PlayerScreen({super.key});
@@ -101,7 +101,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _loadSourates() async {
     try {
       final s = await _quranService.getSourates();
-      if (mounted) setState(() { _sourates = s; _loadingData = false; });
+      if (mounted) { setState(() { _sourates = s; _loadingData = false; }); _ctrl.setPlaylist(s); }
     } catch (e) {
       if (mounted) setState(() {
         _erreur      = 'Impossible de charger les sourates.';
